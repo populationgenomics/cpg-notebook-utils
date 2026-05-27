@@ -24,6 +24,7 @@ mid-session. After setup_path() runs, either:
     - Set it inline in any %%bash cell that uses plugins:
         export BCFTOOLS_PLUGINS=/content/tools/bcftools-1.23.1/lib/bcftools
 """
+
 from __future__ import annotations
 
 import json
@@ -35,29 +36,34 @@ import subprocess
 import tarfile
 import urllib.request
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Version constants — override by passing version= to individual install fns
 # ---------------------------------------------------------------------------
-HTSLIB_VERSION    = '1.23.1'
-SAMTOOLS_VERSION  = '1.23.1'
-BCFTOOLS_VERSION  = '1.23.1'
-SHAPEIT5_VERSION  = '5.1.1'
-BEAGLE_VERSION    = '27Feb25.75f'
-GLIMPSE2_VERSION  = '2.0.0'
-KING_VERSION      = '2.3.2'
-PLINK2_VERSION    = 'v2.0.0-a.7.1'    # GitHub release tag on chrchang/plink-ng; pass 'latest' to auto-resolve
-PLINK19_VERSION   = 'v1.9.0-b.7.11'   # GitHub release tag on chrchang/plink-ng; pass 'latest' to auto-resolve
+HTSLIB_VERSION = '1.23.1'
+SAMTOOLS_VERSION = '1.23.1'
+BCFTOOLS_VERSION = '1.23.1'
+SHAPEIT5_VERSION = '5.1.1'
+BEAGLE_VERSION = '27Feb25.75f'
+GLIMPSE2_VERSION = '2.0.0'
+KING_VERSION = '2.3.2'
+PLINK2_VERSION = 'v2.0.0-a.7.1'  # GitHub release tag on chrchang/plink-ng; pass 'latest' to auto-resolve
+PLINK19_VERSION = 'v1.9.0-b.7.11'  # GitHub release tag on chrchang/plink-ng; pass 'latest' to auto-resolve
 
-_PLINK_NG_REPO    = 'chrchang/plink-ng'
-HAPIBD_VERSION    = 'latest'   # no versioned release URL — downloads current jar from faculty page
-IBDENDS_VERSION   = 'latest'   # no pinned release — downloads current jar from faculty page
+_PLINK_NG_REPO = 'chrchang/plink-ng'
+HAPIBD_VERSION = (
+    'latest'  # no versioned release URL — downloads current jar from faculty page
+)
+IBDENDS_VERSION = (
+    'latest'  # no pinned release — downloads current jar from faculty page
+)
 
 # /content is local SSD on COS — writable, fast, 2.9T, but does not persist across VM shutdown
-WORKDIR     = Path(os.environ.get('WORKDIR', '/content'))
+WORKDIR = Path(os.environ.get('WORKDIR', '/content'))
 INSTALL_DIR = WORKDIR / 'tools'
-BUILD_DIR   = Path('/tmp/build')
+BUILD_DIR = Path('/tmp/build')
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s  %(message)s')
 log = logging.getLogger(__name__)
@@ -66,6 +72,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
+
 
 def _run(cmd: list, cwd: Path | None = None, silent: bool = False) -> str:
     """Run a command; stream stdout to terminal unless silent=True. Always captures stderr."""
@@ -91,7 +98,8 @@ def _run(cmd: list, cwd: Path | None = None, silent: bool = False) -> str:
 def _apt(*packages: str) -> None:
     """Install apt packages, skipping any already installed."""
     missing = [
-        p for p in packages
+        p
+        for p in packages
         if subprocess.run(['dpkg', '-s', p], capture_output=True).returncode != 0
     ]
     if missing:
@@ -237,11 +245,11 @@ def _install_jar_tool(
 ) -> Path:
     """Download a JAR and write a shell wrapper. Returns the bin/ directory."""
     wrapper_name = wrapper_name or name
-    prefix   = _prefix(name, version, install_dir)
-    bin_dir  = prefix / 'bin'
+    prefix = _prefix(name, version, install_dir)
+    bin_dir = prefix / 'bin'
     jars_dir = prefix / 'jars'
-    jar      = jars_dir / jar_filename
-    wrapper  = bin_dir / wrapper_name
+    jar = jars_dir / jar_filename
+    wrapper = bin_dir / wrapper_name
 
     if not force and wrapper.exists():
         log.info('%s %s already installed, re-linking', name, version)
@@ -271,7 +279,7 @@ def _install_archived_binary(
 ) -> Path:
     """Download a .tar.gz or .zip archive, find binary_name, install to prefix/bin."""
     dest_name = dest_name or binary_name
-    prefix  = _prefix(name, version, install_dir)
+    prefix = _prefix(name, version, install_dir)
     bin_dir = prefix / 'bin'
 
     if not force and (bin_dir / dest_name).exists():
@@ -311,6 +319,7 @@ def _install_archived_binary(
 # Source-compiled tools
 # ---------------------------------------------------------------------------
 
+
 def install_htslib(
     version: str = HTSLIB_VERSION,
     install_dir: Path | None = None,
@@ -319,7 +328,7 @@ def install_htslib(
 ) -> Path:
     """Build and install htslib from source. Returns the bin/ directory."""
     install_dir = install_dir or INSTALL_DIR
-    prefix  = _prefix('htslib', version, install_dir)
+    prefix = _prefix('htslib', version, install_dir)
     bin_dir = prefix / 'bin'
 
     if not force and (bin_dir / 'bgzip').exists():
@@ -329,8 +338,16 @@ def install_htslib(
         return bin_dir
 
     _ensure_dirs()
-    _apt('autoconf', 'make', 'gcc', 'libcurl4-openssl-dev',
-         'libbz2-dev', 'liblzma-dev', 'zlib1g-dev', 'libssl-dev')
+    _apt(
+        'autoconf',
+        'make',
+        'gcc',
+        'libcurl4-openssl-dev',
+        'libbz2-dev',
+        'liblzma-dev',
+        'zlib1g-dev',
+        'libssl-dev',
+    )
 
     tarball = build_dir / f'htslib-{version}.tar.bz2'
     src_dir = build_dir / f'htslib-{version}'
@@ -342,8 +359,16 @@ def install_htslib(
         )
     _untar(tarball, src_dir)
 
-    _run(['./configure', f'--prefix={prefix}',
-          '--enable-libcurl', '--enable-gcs', '--enable-plugins'], cwd=src_dir)
+    _run(
+        [
+            './configure',
+            f'--prefix={prefix}',
+            '--enable-libcurl',
+            '--enable-gcs',
+            '--enable-plugins',
+        ],
+        cwd=src_dir,
+    )
     _run(['make', '-j4'], cwd=src_dir)
     _run(['make', 'install'], cwd=src_dir)
 
@@ -362,7 +387,7 @@ def install_samtools(
 ) -> Path:
     """Build and install samtools from source. Returns the bin/ directory."""
     install_dir = install_dir or INSTALL_DIR
-    prefix  = _prefix('samtools', version, install_dir)
+    prefix = _prefix('samtools', version, install_dir)
     bin_dir = prefix / 'bin'
 
     if not force and (bin_dir / 'samtools').exists():
@@ -373,11 +398,23 @@ def install_samtools(
     _ensure_dirs()
     htslib_prefix = _prefix('htslib', htslib_version, install_dir)
     if not (htslib_prefix / 'bin' / 'bgzip').exists():
-        install_htslib(version=htslib_version, install_dir=install_dir,
-                       build_dir=build_dir, force=force)
+        install_htslib(
+            version=htslib_version,
+            install_dir=install_dir,
+            build_dir=build_dir,
+            force=force,
+        )
 
-    _apt('autoconf', 'make', 'gcc', 'libcurl4-openssl-dev',
-         'libbz2-dev', 'liblzma-dev', 'zlib1g-dev', 'libssl-dev')
+    _apt(
+        'autoconf',
+        'make',
+        'gcc',
+        'libcurl4-openssl-dev',
+        'libbz2-dev',
+        'liblzma-dev',
+        'zlib1g-dev',
+        'libssl-dev',
+    )
 
     tarball = build_dir / f'samtools-{version}.tar.bz2'
     src_dir = build_dir / f'samtools-{version}'
@@ -389,7 +426,10 @@ def install_samtools(
         )
     _untar(tarball, src_dir)
 
-    _run(['./configure', f'--prefix={prefix}', f'--with-htslib={htslib_prefix}'], cwd=src_dir)
+    _run(
+        ['./configure', f'--prefix={prefix}', f'--with-htslib={htslib_prefix}'],
+        cwd=src_dir,
+    )
     _run(['make', '-j4'], cwd=src_dir)
     _run(['make', 'install'], cwd=src_dir)
 
@@ -410,11 +450,11 @@ def install_bcftools(
     Returns the bin/ directory.
     """
     install_dir = install_dir or INSTALL_DIR
-    prefix      = _prefix('bcftools', version, install_dir)
-    bin_dir     = prefix / 'bin'
+    prefix = _prefix('bcftools', version, install_dir)
+    bin_dir = prefix / 'bin'
     plugins_dir = prefix / 'lib' / 'bcftools'
 
-    gtc_names   = {'idat2gtc', 'gtc2vcf', 'affy2vcf', 'BAFregress'}
+    gtc_names = {'idat2gtc', 'gtc2vcf', 'affy2vcf', 'BAFregress'}
     score_names = {'munge', 'liftover', 'score', 'metal', 'blup', 'pgs'}
 
     all_plugins_present = all(
@@ -428,11 +468,24 @@ def install_bcftools(
     _ensure_dirs()
     htslib_prefix = _prefix('htslib', htslib_version, install_dir)
     if not (htslib_prefix / 'bin' / 'bgzip').exists():
-        install_htslib(version=htslib_version, install_dir=install_dir,
-                       build_dir=build_dir, force=force)
+        install_htslib(
+            version=htslib_version,
+            install_dir=install_dir,
+            build_dir=build_dir,
+            force=force,
+        )
 
-    _apt('autoconf', 'make', 'gcc', 'git', 'libcurl4-openssl-dev',
-         'libbz2-dev', 'liblzma-dev', 'zlib1g-dev', 'libssl-dev')
+    _apt(
+        'autoconf',
+        'make',
+        'gcc',
+        'git',
+        'libcurl4-openssl-dev',
+        'libbz2-dev',
+        'liblzma-dev',
+        'zlib1g-dev',
+        'libssl-dev',
+    )
 
     tarball = build_dir / f'bcftools-{version}.tar.bz2'
     src_dir = build_dir / f'bcftools-{version}'
@@ -446,7 +499,10 @@ def install_bcftools(
     # ── bcftools binary ────────────────────────────────────────────────────────
     if force or not (bin_dir / 'bcftools').exists():
         _untar(tarball, src_dir)
-        _run(['./configure', f'--prefix={prefix}', f'--with-htslib={htslib_prefix}'], cwd=src_dir)
+        _run(
+            ['./configure', f'--prefix={prefix}', f'--with-htslib={htslib_prefix}'],
+            cwd=src_dir,
+        )
         _run(['make', '-j4'], cwd=src_dir)
         _run(['make', 'install'], cwd=src_dir)
         # Copy ALL standard compiled plugins
@@ -464,17 +520,22 @@ def install_bcftools(
     plugins_dir.mkdir(parents=True, exist_ok=True)
     if not (src_dir / 'Makefile').exists():
         _untar(tarball, src_dir)
-        _run(['./configure', f'--prefix={prefix}', f'--with-htslib={htslib_prefix}'], cwd=src_dir)
+        _run(
+            ['./configure', f'--prefix={prefix}', f'--with-htslib={htslib_prefix}'],
+            cwd=src_dir,
+        )
 
     bcf_plugins_src = src_dir / 'plugins'
 
     # ── gtc2vcf plugins (idat2gtc, gtc2vcf, affy2vcf, BAFregress) ─────────────
     # Plugins include "bcftools.h" from the source tree (not installed to prefix),
     # so they must be compiled within the bcftools source tree via make.
-    gtc_missing = force or any(not (plugins_dir / f'{n}.so').exists() for n in gtc_names)
+    gtc_missing = force or any(
+        not (plugins_dir / f'{n}.so').exists() for n in gtc_names
+    )
     if gtc_missing:
         gtc2vcf_tarball = build_dir / 'gtc2vcf.tar.gz'
-        gtc2vcf_stage   = build_dir / 'gtc2vcf-master'
+        gtc2vcf_stage = build_dir / 'gtc2vcf-master'
         _download(
             'https://github.com/freeseek/gtc2vcf/archive/refs/heads/master.tar.gz',
             gtc2vcf_tarball,
@@ -498,16 +559,24 @@ def install_bcftools(
     # the plain include path — create a shim that re-exports it with corrected
     # #include paths. Two extra SuiteSparse headers are also downloaded into the
     # bcftools source root because pgs.mk references them from there.
-    score_missing = force or any(not (plugins_dir / f'{n}.so').exists() for n in score_names)
+    score_missing = force or any(
+        not (plugins_dir / f'{n}.so').exists() for n in score_names
+    )
     if score_missing:
         _apt('libsuitesparse-dev')
         cholmod_shim = Path('/usr/include/cholmod.h')
         if not cholmod_shim.exists():
-            _run(['sudo', 'bash', '-c',
-                  "sed "
-                  "'s|^#include \"cholmod_|#include \"suitesparse/cholmod_|;"
-                  "s|^#include \"SuiteSparse_|#include \"suitesparse/SuiteSparse_|' "
-                  "/usr/include/suitesparse/cholmod.h | sudo tee /usr/include/cholmod.h"])
+            _run(
+                [
+                    'sudo',
+                    'bash',
+                    '-c',
+                    'sed '
+                    '\'s|^#include "cholmod_|#include "suitesparse/cholmod_|;'
+                    's|^#include "SuiteSparse_|#include "suitesparse/SuiteSparse_|\' '
+                    '/usr/include/suitesparse/cholmod.h | sudo tee /usr/include/cholmod.h',
+                ]
+            )
         # SuiteSparse headers expected in the bcftools source root by pgs.mk
         for gh_path, dest_name in [
             ('SuiteSparse_config/SuiteSparse_config.h', 'SuiteSparse_config.h'),
@@ -519,8 +588,16 @@ def install_bcftools(
             )
         # score source files + pgs.mk (pgs.mk is included by the bcftools Makefile
         # via -include plugins/*.mk and adds the CHOLMOD link flags for pgs.so)
-        for fname in ['score.c', 'score.h', 'munge.c', 'liftover.c',
-                      'metal.c', 'blup.c', 'pgs.c', 'pgs.mk']:
+        for fname in [
+            'score.c',
+            'score.h',
+            'munge.c',
+            'liftover.c',
+            'metal.c',
+            'blup.c',
+            'pgs.c',
+            'pgs.mk',
+        ]:
             _download(
                 f'https://raw.githubusercontent.com/freeseek/score/master/{fname}',
                 bcf_plugins_src / fname,
@@ -543,6 +620,7 @@ def install_bcftools(
 # Static binary tools
 # ---------------------------------------------------------------------------
 
+
 def install_shapeit5(
     version: str = SHAPEIT5_VERSION,
     install_dir: Path | None = None,
@@ -551,7 +629,7 @@ def install_shapeit5(
 ) -> Path:
     """Download shapeit5 static binaries. Returns the bin/ directory."""
     install_dir = install_dir or INSTALL_DIR
-    prefix  = _prefix('shapeit5', version, install_dir)
+    prefix = _prefix('shapeit5', version, install_dir)
     bin_dir = prefix / 'bin'
 
     if not force and (bin_dir / 'phase_common').exists():
@@ -563,7 +641,14 @@ def install_shapeit5(
     bin_dir.mkdir(parents=True, exist_ok=True)
 
     base = f'https://github.com/odelaneau/shapeit5/releases/download/v{version}'
-    for name in ['phase_common', 'phase_rare', 'ligate', 'switch', 'simulate', 'xcftools']:
+    for name in [
+        'phase_common',
+        'phase_rare',
+        'ligate',
+        'switch',
+        'simulate',
+        'xcftools',
+    ]:
         dest = bin_dir / name
         _download(f'{base}/{name}_static', dest)
         dest.chmod(dest.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
@@ -581,7 +666,7 @@ def install_glimpse2(
 ) -> Path:
     """Download GLIMPSE2 static binaries. Returns the bin/ directory."""
     install_dir = install_dir or INSTALL_DIR
-    prefix  = _prefix('glimpse2', version, install_dir)
+    prefix = _prefix('glimpse2', version, install_dir)
     bin_dir = prefix / 'bin'
 
     if not force and (bin_dir / 'GLIMPSE2_phase').exists():
@@ -613,6 +698,7 @@ def install_glimpse2(
 # Java JAR tools (openjdk-17 assumed present)
 # ---------------------------------------------------------------------------
 
+
 def install_beagle(
     version: str = BEAGLE_VERSION,
     install_dir: Path | None = None,
@@ -621,16 +707,19 @@ def install_beagle(
 ) -> Path:
     """Download beagle JAR and write a shell wrapper. Returns the bin/ directory."""
     return _install_jar_tool(
-        'beagle', version,
+        'beagle',
+        version,
         f'https://faculty.washington.edu/browning/beagle/beagle.{version}.jar',
         f'beagle.{version}.jar',
-        install_dir or INSTALL_DIR, force,
+        install_dir or INSTALL_DIR,
+        force,
     )
 
 
 # ---------------------------------------------------------------------------
 # Additional static binary / JAR / pip tools
 # ---------------------------------------------------------------------------
+
 
 def install_king(
     version: str = KING_VERSION,
@@ -641,10 +730,13 @@ def install_king(
     """Download KING pre-compiled binary. Returns the bin/ directory."""
     ver_nodot = version.replace('.', '')
     return _install_archived_binary(
-        'king', version,
+        'king',
+        version,
         f'https://www.kingrelatedness.com/executables/Linux-king{ver_nodot}.tar.gz',
         'king',
-        install_dir or INSTALL_DIR, build_dir, force,
+        install_dir or INSTALL_DIR,
+        build_dir,
+        force,
     )
 
 
@@ -685,10 +777,13 @@ def install_plink2(
     """
     tag = _resolve_plink_tag(version, tag_prefix='v2.0.0-')
     return _install_archived_binary(
-        'plink2', tag,
+        'plink2',
+        tag,
         f'https://github.com/{_PLINK_NG_REPO}/releases/download/{tag}/plink2_linux_avx2.zip',
         'plink2',
-        install_dir or INSTALL_DIR, build_dir, force,
+        install_dir or INSTALL_DIR,
+        build_dir,
+        force,
     )
 
 
@@ -705,10 +800,13 @@ def install_plink19(
     """
     tag = _resolve_plink_tag(version, tag_prefix='v1.9.0-')
     return _install_archived_binary(
-        'plink19', tag,
+        'plink19',
+        tag,
         f'https://github.com/{_PLINK_NG_REPO}/releases/download/{tag}/plink_linux_x86_64.zip',
         'plink',
-        install_dir or INSTALL_DIR, build_dir, force,
+        install_dir or INSTALL_DIR,
+        build_dir,
+        force,
     )
 
 
@@ -720,10 +818,12 @@ def install_hapibd(
 ) -> Path:
     """Download hap-IBD JAR and write a shell wrapper. Returns the bin/ directory."""
     return _install_jar_tool(
-        'hapibd', version,
+        'hapibd',
+        version,
         'https://faculty.washington.edu/browning/hap-ibd.jar',
         'hap-ibd.jar',
-        install_dir or INSTALL_DIR, force,
+        install_dir or INSTALL_DIR,
+        force,
         wrapper_name='hap-ibd',
     )
 
@@ -736,15 +836,19 @@ def install_ibdends(
 ) -> Path:
     """Download ibd-ends JAR and write a shell wrapper. Returns the bin/ directory."""
     return _install_jar_tool(
-        'ibdends', version,
+        'ibdends',
+        version,
         'https://faculty.washington.edu/browning/ibd-ends.jar',
         'ibd-ends.jar',
-        install_dir or INSTALL_DIR, force,
+        install_dir or INSTALL_DIR,
+        force,
         wrapper_name='ibd-ends',
     )
 
 
-def _pip_install_pypi(pkg: str, force: bool, build_deps: list[str] | None = None) -> None:
+def _pip_install_pypi(
+    pkg: str, force: bool, build_deps: list[str] | None = None
+) -> None:
     """Install a package from PyPI."""
     if not force and _pip_installed(pkg.split('==')[0]):
         log.info('%s already installed', pkg)
@@ -845,16 +949,21 @@ def install_archetypal_analysis(
         log.info('%s already installed', pkg)
         return
     ref = f'@{version}' if version else ''
-    _run_pip([
-        'pip', 'install', '--no-deps',
-        f'git+https://github.com/AI-sandbox/archetypal-analysis.git{ref}',
-    ])
+    _run_pip(
+        [
+            'pip',
+            'install',
+            '--no-deps',
+            f'git+https://github.com/AI-sandbox/archetypal-analysis.git{ref}',
+        ]
+    )
     log.info('%s installed (--no-deps, version pins bypassed)', pkg)
 
 
 # ---------------------------------------------------------------------------
 # Path registration (run once after installs complete)
 # ---------------------------------------------------------------------------
+
 
 def setup_path(install_dir: Path | None = None) -> None:
     """
@@ -897,7 +1006,8 @@ def setup_path(install_dir: Path | None = None) -> None:
     export_line = f'export BCFTOOLS_PLUGINS={plugins_dir}'
     bashrc_text = bashrc.read_text() if bashrc.exists() else ''
     filtered_rc = '\n'.join(
-        ln for ln in bashrc_text.splitlines()
+        ln
+        for ln in bashrc_text.splitlines()
         if not ln.startswith('export BCFTOOLS_PLUGINS=')
     )
     new_rc = filtered_rc.rstrip('\n') + f'\n{export_line}\n'
@@ -914,19 +1024,19 @@ def setup_path(install_dir: Path | None = None) -> None:
 # Public tool registry + install_all
 # ---------------------------------------------------------------------------
 
-TOOL_FUNCS: dict[str, callable] = {
-    'htslib':    install_htslib,
-    'samtools':  install_samtools,
-    'bcftools':  install_bcftools,
-    'shapeit5':  install_shapeit5,
-    'glimpse2':  install_glimpse2,
-    'beagle':    install_beagle,
-    'king':      install_king,
-    'plink2':    install_plink2,
-    'plink19':   install_plink19,
-    'hapibd':    install_hapibd,
-    'ibdends':   install_ibdends,
-    'fraposa':   install_fraposa,
+TOOL_FUNCS: dict[str, Callable] = {
+    'htslib': install_htslib,
+    'samtools': install_samtools,
+    'bcftools': install_bcftools,
+    'shapeit5': install_shapeit5,
+    'glimpse2': install_glimpse2,
+    'beagle': install_beagle,
+    'king': install_king,
+    'plink2': install_plink2,
+    'plink19': install_plink19,
+    'hapibd': install_hapibd,
+    'ibdends': install_ibdends,
+    'fraposa': install_fraposa,
     'adamixture': install_adamixture,
     'archetypal': install_archetypal_analysis,
 }
@@ -951,7 +1061,10 @@ def install_all(
 # Uninstall functions
 # ---------------------------------------------------------------------------
 
-def _uninstall(tool: str, version: str, install_dir: Path, extra: callable | None = None) -> None:
+
+def _uninstall(
+    tool: str, version: str, install_dir: Path, extra: Callable | None = None
+) -> None:
     prefix = _prefix(tool, version, install_dir)
     if not prefix.exists():
         log.info('%s %s is not installed', tool, version)
@@ -963,47 +1076,71 @@ def _uninstall(tool: str, version: str, install_dir: Path, extra: callable | Non
     log.info('%s %s removed', tool, version)
 
 
-def uninstall_htslib(version: str = HTSLIB_VERSION, install_dir: Path | None = None) -> None:
-    _uninstall('htslib', version, install_dir or INSTALL_DIR, extra=_deregister_ldconfig)
+def uninstall_htslib(
+    version: str = HTSLIB_VERSION, install_dir: Path | None = None
+) -> None:
+    _uninstall(
+        'htslib', version, install_dir or INSTALL_DIR, extra=_deregister_ldconfig
+    )
 
 
-def uninstall_samtools(version: str = SAMTOOLS_VERSION, install_dir: Path | None = None) -> None:
+def uninstall_samtools(
+    version: str = SAMTOOLS_VERSION, install_dir: Path | None = None
+) -> None:
     _uninstall('samtools', version, install_dir or INSTALL_DIR)
 
 
-def uninstall_bcftools(version: str = BCFTOOLS_VERSION, install_dir: Path | None = None) -> None:
+def uninstall_bcftools(
+    version: str = BCFTOOLS_VERSION, install_dir: Path | None = None
+) -> None:
     _uninstall('bcftools', version, install_dir or INSTALL_DIR)
 
 
-def uninstall_shapeit5(version: str = SHAPEIT5_VERSION, install_dir: Path | None = None) -> None:
+def uninstall_shapeit5(
+    version: str = SHAPEIT5_VERSION, install_dir: Path | None = None
+) -> None:
     _uninstall('shapeit5', version, install_dir or INSTALL_DIR)
 
 
-def uninstall_glimpse2(version: str = GLIMPSE2_VERSION, install_dir: Path | None = None) -> None:
+def uninstall_glimpse2(
+    version: str = GLIMPSE2_VERSION, install_dir: Path | None = None
+) -> None:
     _uninstall('glimpse2', version, install_dir or INSTALL_DIR)
 
 
-def uninstall_beagle(version: str = BEAGLE_VERSION, install_dir: Path | None = None) -> None:
+def uninstall_beagle(
+    version: str = BEAGLE_VERSION, install_dir: Path | None = None
+) -> None:
     _uninstall('beagle', version, install_dir or INSTALL_DIR)
 
 
-def uninstall_king(version: str = KING_VERSION, install_dir: Path | None = None) -> None:
+def uninstall_king(
+    version: str = KING_VERSION, install_dir: Path | None = None
+) -> None:
     _uninstall('king', version, install_dir or INSTALL_DIR)
 
 
-def uninstall_plink2(version: str = PLINK2_VERSION, install_dir: Path | None = None) -> None:
+def uninstall_plink2(
+    version: str = PLINK2_VERSION, install_dir: Path | None = None
+) -> None:
     _uninstall('plink2', version, install_dir or INSTALL_DIR)
 
 
-def uninstall_plink19(version: str = PLINK19_VERSION, install_dir: Path | None = None) -> None:
+def uninstall_plink19(
+    version: str = PLINK19_VERSION, install_dir: Path | None = None
+) -> None:
     _uninstall('plink19', version, install_dir or INSTALL_DIR)
 
 
-def uninstall_hapibd(version: str = HAPIBD_VERSION, install_dir: Path | None = None) -> None:
+def uninstall_hapibd(
+    version: str = HAPIBD_VERSION, install_dir: Path | None = None
+) -> None:
     _uninstall('hapibd', version, install_dir or INSTALL_DIR)
 
 
-def uninstall_ibdends(version: str = IBDENDS_VERSION, install_dir: Path | None = None) -> None:
+def uninstall_ibdends(
+    version: str = IBDENDS_VERSION, install_dir: Path | None = None
+) -> None:
     _uninstall('ibdends', version, install_dir or INSTALL_DIR)
 
 
@@ -1019,19 +1156,19 @@ def uninstall_archetypal_analysis(**kwargs) -> None:
     _pip_uninstall('archetypal-analysis')
 
 
-UNINSTALL_FUNCS: dict[str, callable] = {
-    'htslib':    uninstall_htslib,
-    'samtools':  uninstall_samtools,
-    'bcftools':  uninstall_bcftools,
-    'shapeit5':  uninstall_shapeit5,
-    'glimpse2':  uninstall_glimpse2,
-    'beagle':    uninstall_beagle,
-    'king':      uninstall_king,
-    'plink2':    uninstall_plink2,
-    'plink19':   uninstall_plink19,
-    'hapibd':    uninstall_hapibd,
-    'ibdends':   uninstall_ibdends,
-    'fraposa':   uninstall_fraposa,
+UNINSTALL_FUNCS: dict[str, Callable] = {
+    'htslib': uninstall_htslib,
+    'samtools': uninstall_samtools,
+    'bcftools': uninstall_bcftools,
+    'shapeit5': uninstall_shapeit5,
+    'glimpse2': uninstall_glimpse2,
+    'beagle': uninstall_beagle,
+    'king': uninstall_king,
+    'plink2': uninstall_plink2,
+    'plink19': uninstall_plink19,
+    'hapibd': uninstall_hapibd,
+    'ibdends': uninstall_ibdends,
+    'fraposa': uninstall_fraposa,
     'adamixture': uninstall_adamixture,
     'archetypal': uninstall_archetypal_analysis,
 }
@@ -1047,22 +1184,22 @@ def uninstall_all(install_dir: Path | None = None) -> None:
 
 # Binary tools: (dir_name, version, relative_check_path)
 _INSTALL_CHECK = {
-    'htslib':    ('htslib',    HTSLIB_VERSION,    'bin/bgzip'),
-    'samtools':  ('samtools',  SAMTOOLS_VERSION,  'bin/samtools'),
-    'bcftools':  ('bcftools',  BCFTOOLS_VERSION,  'bin/bcftools'),
-    'shapeit5':  ('shapeit5',  SHAPEIT5_VERSION,  'bin/phase_common'),
-    'glimpse2':  ('glimpse2',  GLIMPSE2_VERSION,  'bin/GLIMPSE2_phase'),
-    'beagle':    ('beagle',    BEAGLE_VERSION,    'bin/beagle'),
-    'king':      ('king',      KING_VERSION,      'bin/king'),
-    'plink2':    ('plink2',    PLINK2_VERSION,    'bin/plink2'),
-    'plink19':   ('plink19',   PLINK19_VERSION,   'bin/plink'),
-    'hapibd':    ('hapibd',    HAPIBD_VERSION,    'bin/hap-ibd'),
-    'ibdends':   ('ibdends',   IBDENDS_VERSION,   'bin/ibd-ends'),
+    'htslib': ('htslib', HTSLIB_VERSION, 'bin/bgzip'),
+    'samtools': ('samtools', SAMTOOLS_VERSION, 'bin/samtools'),
+    'bcftools': ('bcftools', BCFTOOLS_VERSION, 'bin/bcftools'),
+    'shapeit5': ('shapeit5', SHAPEIT5_VERSION, 'bin/phase_common'),
+    'glimpse2': ('glimpse2', GLIMPSE2_VERSION, 'bin/GLIMPSE2_phase'),
+    'beagle': ('beagle', BEAGLE_VERSION, 'bin/beagle'),
+    'king': ('king', KING_VERSION, 'bin/king'),
+    'plink2': ('plink2', PLINK2_VERSION, 'bin/plink2'),
+    'plink19': ('plink19', PLINK19_VERSION, 'bin/plink'),
+    'hapibd': ('hapibd', HAPIBD_VERSION, 'bin/hap-ibd'),
+    'ibdends': ('ibdends', IBDENDS_VERSION, 'bin/ibd-ends'),
 }
 
 # Pip tools: pip package name used for install-check
 _PIP_CHECK = {
-    'fraposa':    'fraposa-pgsc',
+    'fraposa': 'fraposa-pgsc',
     'adamixture': 'adamixture',
     'archetypal': 'archetypal-analysis-popgen',
 }
@@ -1083,5 +1220,3 @@ def list_tools(install_dir: Path | None = None) -> None:
     for name in sorted(rows):
         version, status = rows[name]
         print(f'{name:<14} {version:<20} {status}')
-
-

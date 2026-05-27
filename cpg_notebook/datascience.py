@@ -70,6 +70,7 @@ re-attached as plain Hail structs/arrays by :func:`from_polars`.  The
 original Hail type is not restored for globals.  This is rarely an issue in
 practice as globals are usually plain scalars or dicts.
 """
+
 from __future__ import annotations
 
 import logging
@@ -158,7 +159,7 @@ def _hail_to_python(value) -> object:
         return [_hail_to_python(v) for v in value]
     if isinstance(value, tuple):
         return tuple(_hail_to_python(v) for v in value)
-    if isinstance(value, (set, frozenset)):
+    if isinstance(value, set | frozenset):
         # Return as list: easier to consume in Polars / JSON than a set.
         return [_hail_to_python(v) for v in value]
     return value
@@ -219,7 +220,7 @@ def _polars_schema_is_nested(df: pl.DataFrame) -> bool:
         True when at least one column has a ``pl.List``, ``pl.Array``, or
         ``pl.Struct`` dtype.
     """
-    return any(isinstance(dt, (pl.List, pl.Array, pl.Struct)) for dt in df.dtypes)
+    return any(isinstance(dt, pl.List | pl.Array | pl.Struct) for dt in df.dtypes)
 
 
 # ---------------------------------------------------------------------------
@@ -247,14 +248,19 @@ def _needs_reconstruction(hail_type) -> bool:
     Returns:
         True when reconstruction is required.
     """
-    if isinstance(hail_type, (htypes.tlocus, htypes.tinterval, htypes.tcall, htypes.tset, htypes.ttuple)):
+    if isinstance(
+        hail_type,
+        htypes.tlocus | htypes.tinterval | htypes.tcall | htypes.tset | htypes.ttuple,
+    ):
         return True
     if isinstance(hail_type, htypes.tstruct):
         return any(_needs_reconstruction(t) for t in hail_type.types)
     if isinstance(hail_type, htypes.tarray):
         return _needs_reconstruction(hail_type.element_type)
     if isinstance(hail_type, htypes.tdict):
-        return _needs_reconstruction(hail_type.key_type) or _needs_reconstruction(hail_type.value_type)
+        return _needs_reconstruction(hail_type.key_type) or _needs_reconstruction(
+            hail_type.value_type
+        )
     return False
 
 
@@ -298,7 +304,12 @@ def _reconstruct_expr(expr, hail_type):
         point_type = hail_type.point_type
         start = _reconstruct_expr(expr.start, point_type)
         end = _reconstruct_expr(expr.end, point_type)
-        return hl.interval(start, end, includes_start=expr.includes_start, includes_end=expr.includes_end)
+        return hl.interval(
+            start,
+            end,
+            includes_start=expr.includes_start,
+            includes_end=expr.includes_end,
+        )
 
     if isinstance(hail_type, htypes.tcall):
         log.warning(
@@ -319,18 +330,19 @@ def _reconstruct_expr(expr, hail_type):
 
     if isinstance(hail_type, htypes.ttuple):
         elements = [
-            _reconstruct_expr(expr[f'_{i}'], t)
-            for i, t in enumerate(hail_type.types)
+            _reconstruct_expr(expr[f'_{i}'], t) for i, t in enumerate(hail_type.types)
         ]
         return hl.tuple(elements)
 
     if isinstance(hail_type, htypes.tstruct):
         if not _needs_reconstruction(hail_type):
             return expr
-        return hl.struct(**{
-            f: _reconstruct_expr(expr[f], t)
-            for f, t in zip(hail_type.fields, hail_type.types)
-        })
+        return hl.struct(
+            **{
+                f: _reconstruct_expr(expr[f], t)
+                for f, t in zip(hail_type.fields, hail_type.types, strict=True)
+            }
+        )
 
     if isinstance(hail_type, htypes.tarray):
         elem_type = hail_type.element_type
@@ -344,13 +356,17 @@ def _reconstruct_expr(expr, hail_type):
         if not (_needs_reconstruction(key_type) or _needs_reconstruction(val_type)):
             return expr
         # expand_types encodes tdict<K,V> as tarray<tstruct(key: K', value: V')>
-        return hl.dict(hl.map(
-            lambda kv: hl.tuple([
-                _reconstruct_expr(kv.key, key_type),
-                _reconstruct_expr(kv.value, val_type),
-            ]),
-            expr,
-        ))
+        return hl.dict(
+            hl.map(
+                lambda kv: hl.tuple(
+                    [
+                        _reconstruct_expr(kv.key, key_type),
+                        _reconstruct_expr(kv.value, val_type),
+                    ]
+                ),
+                expr,
+            )
+        )
 
     return expr
 
@@ -375,7 +391,7 @@ def _apply_schema_reconstruction(ht: hl.Table, row_schema: htypes.tstruct) -> hl
     current_fields = set(ht.row)
     annotations = {}
 
-    for fname, ftype in zip(row_schema.fields, row_schema.types):
+    for fname, ftype in zip(row_schema.fields, row_schema.types, strict=True):
         if fname not in current_fields:
             log.warning(
                 'Field %r is in row_schema but not in the current table '
@@ -598,7 +614,9 @@ def to_polars(
             ``'arrow'``.
     """
     globals_struct = hl.eval(ht.globals)
-    globals_dict = _hail_to_python(globals_struct) if globals_struct is not None else {}
+    globals_dict: dict = (
+        _hail_to_python(globals_struct) if globals_struct is not None else {}  # type: ignore[assignment]
+    )
 
     # Capture schema and keys before flatten changes the layout.
     row_schema: htypes.tstruct | None = ht.row.dtype
@@ -612,7 +630,9 @@ def to_polars(
     if prefer == 'auto':
         prefer = 'parquet' if _has_nested_types(ht.row.dtype) else 'arrow'
     elif prefer not in ('parquet', 'arrow'):
-        raise ValueError(f"prefer must be 'auto', 'parquet', or 'arrow'; got {prefer!r}")
+        raise ValueError(
+            f"prefer must be 'auto', 'parquet', or 'arrow'; got {prefer!r}"
+        )
 
     log.info('to_polars: using %s path (flatten=%s)', prefer, flatten)
 
@@ -703,7 +723,9 @@ def from_polars(
             ``'arrow'``.
     """
     if prefer not in ('auto', 'parquet', 'arrow'):
-        raise ValueError(f"prefer must be 'auto', 'parquet', or 'arrow'; got {prefer!r}")
+        raise ValueError(
+            f"prefer must be 'auto', 'parquet', or 'arrow'; got {prefer!r}"
+        )
 
     resolved_prefer = prefer
     if prefer == 'auto':
@@ -745,8 +767,16 @@ def from_polars(
 
 # Default 10-colour palette for layers without an explicit color_map.
 _DEFAULT_PALETTE = (
-    '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
-    '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf',
+    '#1f77b4',
+    '#ff7f0e',
+    '#2ca02c',
+    '#d62728',
+    '#9467bd',
+    '#8c564b',
+    '#e377c2',
+    '#7f7f7f',
+    '#bcbd22',
+    '#17becf',
 )
 
 
@@ -774,6 +804,7 @@ class PCALayer:
         hover_cols: Extra columns to include in the hover tooltip, as a
             mapping column -> display label. Use {} for none.
     """
+
     name: str
     group_col: str
     mask: pd.Series | None = None
@@ -870,15 +901,17 @@ def plot_pca(
                 marker['line'] = dict(width=layer.marker_line_width, color='black')
 
             trace_recipes.append({'kind': 'scatter', 'sub': sub})
-            fig.add_trace(go.Scattergl(
-                x=sub[f'{pc_prefix}1'],
-                y=sub[f'{pc_prefix}2'],
-                mode='markers',
-                name=f'{layer.name}: {group}',
-                marker=marker,
-                customdata=customdata,
-                hovertemplate=hovertemplate,
-            ))
+            fig.add_trace(
+                go.Scattergl(
+                    x=sub[f'{pc_prefix}1'],
+                    y=sub[f'{pc_prefix}2'],
+                    mode='markers',
+                    name=f'{layer.name}: {group}',
+                    marker=marker,
+                    customdata=customdata,
+                    hovertemplate=hovertemplate,
+                )
+            )
 
             if not layer.draw_ellipses:
                 continue
@@ -890,25 +923,37 @@ def plot_pca(
             for sd in sd_thresholds:
                 is_active = sd == default_sd
                 trace_recipes.append({'kind': 'ellipse', 'sub': sub, 'sd': sd})
-                fig.add_trace(go.Scatter(
-                    x=mu_x + sd * sig_x * np.cos(theta),
-                    y=mu_y + sd * sig_y * np.sin(theta),
-                    mode='lines',
-                    name=f'{layer.name}: {group} bounds',
-                    legendgroup=f'{layer.name}_ellipse_{group}',
-                    visible=is_active,
-                    showlegend=is_active,
-                    hoverinfo='skip',
-                    line=dict(color=color, width=2, dash='dot' if sd <= 3 else 'dash'),
-                ))
+                fig.add_trace(
+                    go.Scatter(
+                        x=mu_x + sd * sig_x * np.cos(theta),
+                        y=mu_y + sd * sig_y * np.sin(theta),
+                        mode='lines',
+                        name=f'{layer.name}: {group} bounds',
+                        legendgroup=f'{layer.name}_ellipse_{group}',
+                        visible=is_active,
+                        showlegend=is_active,
+                        hoverinfo='skip',
+                        line=dict(
+                            color=color, width=2, dash='dot' if sd <= 3 else 'dash'
+                        ),
+                    )
+                )
 
-    x_buttons = _pc_axis_buttons(trace_recipes, pc_prefix, theta, range(1, n_pcs + 1), axis='x')
-    y_buttons = _pc_axis_buttons(trace_recipes, pc_prefix, theta, range(2, n_pcs + 1), axis='y')
+    x_buttons = _pc_axis_buttons(
+        trace_recipes, pc_prefix, theta, range(1, n_pcs + 1), axis='x'
+    )
+    y_buttons = _pc_axis_buttons(
+        trace_recipes, pc_prefix, theta, range(2, n_pcs + 1), axis='y'
+    )
     sd_buttons = _sd_buttons(trace_recipes, sd_thresholds)
 
     axis_style = dict(
-        showgrid=True, gridcolor='black', griddash='dash',
-        zeroline=True, zerolinecolor='black', zerolinewidth=1.5,
+        showgrid=True,
+        gridcolor='black',
+        griddash='dash',
+        zeroline=True,
+        zerolinecolor='black',
+        zerolinewidth=1.5,
         linecolor='black',
     )
     fig.update_layout(
@@ -921,17 +966,62 @@ def plot_pca(
         xaxis=dict(title_text=f'{pc_prefix}1', **axis_style),
         yaxis=dict(title_text=f'{pc_prefix}2', **axis_style),
         updatemenus=[
-            dict(buttons=x_buttons, direction='down', pad={'r': 10, 't': 10},
-                 showactive=True, x=0.08, xanchor='left', y=1.1, yanchor='top'),
-            dict(buttons=y_buttons, direction='down', pad={'r': 10, 't': 10},
-                 showactive=True, x=0.25, xanchor='left', y=1.1, yanchor='top'),
-            dict(buttons=sd_buttons, direction='down', pad={'r': 10, 't': 10},
-                 showactive=True, x=0.45, xanchor='left', y=1.1, yanchor='top'),
+            dict(
+                buttons=x_buttons,
+                direction='down',
+                pad={'r': 10, 't': 10},
+                showactive=True,
+                x=0.08,
+                xanchor='left',
+                y=1.1,
+                yanchor='top',
+            ),
+            dict(
+                buttons=y_buttons,
+                direction='down',
+                pad={'r': 10, 't': 10},
+                showactive=True,
+                x=0.25,
+                xanchor='left',
+                y=1.1,
+                yanchor='top',
+            ),
+            dict(
+                buttons=sd_buttons,
+                direction='down',
+                pad={'r': 10, 't': 10},
+                showactive=True,
+                x=0.45,
+                xanchor='left',
+                y=1.1,
+                yanchor='top',
+            ),
         ],
         annotations=[
-            dict(text='X-Axis:', x=0.04, y=1.08, xref='paper', yref='paper', showarrow=False),
-            dict(text='Y-Axis:', x=0.21, y=1.08, xref='paper', yref='paper', showarrow=False),
-            dict(text='Ellipses:', x=0.40, y=1.08, xref='paper', yref='paper', showarrow=False),
+            dict(
+                text='X-Axis:',
+                x=0.04,
+                y=1.08,
+                xref='paper',
+                yref='paper',
+                showarrow=False,
+            ),
+            dict(
+                text='Y-Axis:',
+                x=0.21,
+                y=1.08,
+                xref='paper',
+                yref='paper',
+                showarrow=False,
+            ),
+            dict(
+                text='Ellipses:',
+                x=0.40,
+                y=1.08,
+                xref='paper',
+                yref='paper',
+                showarrow=False,
+            ),
         ],
     )
 
@@ -1021,11 +1111,13 @@ def _pc_axis_buttons(
                 mu = sub[pc_col].median()
                 sig = sub[pc_col].std()
                 data.append(mu + recipe['sd'] * sig * trig)
-        buttons.append(dict(
-            label=pc_col,
-            method='update',
-            args=[{axis: data}, {f'{axis}axis.title.text': pc_col}],
-        ))
+        buttons.append(
+            dict(
+                label=pc_col,
+                method='update',
+                args=[{axis: data}, {f'{axis}axis.title.text': pc_col}],
+            )
+        )
     return buttons
 
 
@@ -1046,9 +1138,11 @@ def _sd_buttons(
                 vis.append(is_active)
                 show_leg.append(is_active)
         label = f'{target_sd} SD' if target_sd is not None else 'Off'
-        buttons.append(dict(
-            label=label,
-            method='restyle',
-            args=[{'visible': vis, 'showlegend': show_leg}],
-        ))
+        buttons.append(
+            dict(
+                label=label,
+                method='restyle',
+                args=[{'visible': vis, 'showlegend': show_leg}],
+            )
+        )
     return buttons

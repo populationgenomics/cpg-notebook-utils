@@ -19,11 +19,13 @@ king, plink2, plink19, hapibd, ibdends, fraposa) are in the companion module:
     from cpg_notebook import genomics as ng
     ng.install_all()
 """
+
 from __future__ import annotations
 
 import logging
 import os
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 
 from cpg_notebook.genomics import (
@@ -47,13 +49,16 @@ log = logging.getLogger(__name__)
 # Version constants — override by passing version= to individual install fns
 # ---------------------------------------------------------------------------
 EIGENSOFT_VERSION = '8.0.0'
-FLARE_VERSION     = 'latest'   # no versioned release URL — downloads current jar from faculty page
+FLARE_VERSION = (
+    'latest'  # no versioned release URL — downloads current jar from faculty page
+)
 ADMIXTURE_VERSION = '1.3.1'
 
 
 # ---------------------------------------------------------------------------
 # Population genetics tools
 # ---------------------------------------------------------------------------
+
 
 def install_eigensoft(
     version: str = EIGENSOFT_VERSION,
@@ -63,7 +68,7 @@ def install_eigensoft(
 ) -> Path:
     """Build and install EIGENSOFT from source. Returns the bin/ directory."""
     install_dir = install_dir or INSTALL_DIR
-    prefix  = _prefix('eigensoft', version, install_dir)
+    prefix = _prefix('eigensoft', version, install_dir)
     bin_dir = prefix / 'bin'
 
     if not force and (bin_dir / 'smartpca').exists():
@@ -72,7 +77,15 @@ def install_eigensoft(
         return bin_dir
 
     _ensure_dirs()
-    _apt('make', 'gcc', 'g++', 'libgsl-dev', 'liblapack-dev', 'liblapacke-dev', 'libopenblas-dev')
+    _apt(
+        'make',
+        'gcc',
+        'g++',
+        'libgsl-dev',
+        'liblapack-dev',
+        'liblapacke-dev',
+        'libopenblas-dev',
+    )
 
     tarball = build_dir / f'EIG-{version}.tar.gz'
     src_dir = build_dir / f'EIG-{version}'
@@ -95,7 +108,9 @@ def install_eigensoft(
     #      We uncomment it here.
     makefile = src_dir / 'src' / 'Makefile'
     text = makefile.read_text()
-    text = text.replace('# override LDLIBS += -llapacke', 'override LDLIBS += -llapacke')
+    text = text.replace(
+        '# override LDLIBS += -llapacke', 'override LDLIBS += -llapacke'
+    )
     makefile.write_text(text)
 
     # make install moves binaries to ../bin relative to src/ — create it first
@@ -122,10 +137,12 @@ def install_flare(
 ) -> Path:
     """Download flare JAR and write a shell wrapper. Returns the bin/ directory."""
     return _install_jar_tool(
-        'flare', version,
+        'flare',
+        version,
         'https://faculty.washington.edu/browning/flare.jar',
         'flare.jar',
-        install_dir or INSTALL_DIR, force,
+        install_dir or INSTALL_DIR,
+        force,
     )
 
 
@@ -142,10 +159,13 @@ def install_admixture(
     for the latter.
     """
     return _install_archived_binary(
-        'admixture', version,
+        'admixture',
+        version,
         f'https://dalexander.github.io/admixture/binaries/admixture_linux-{version}.tar.gz',
         'admixture',
-        install_dir or INSTALL_DIR, build_dir, force,
+        install_dir or INSTALL_DIR,
+        build_dir,
+        force,
     )
 
 
@@ -153,9 +173,9 @@ def install_admixture(
 # Public tool registry + install_all
 # ---------------------------------------------------------------------------
 
-TOOL_FUNCS: dict[str, callable] = {
+TOOL_FUNCS: dict[str, Callable] = {
     'eigensoft': install_eigensoft,
-    'flare':     install_flare,
+    'flare': install_flare,
     'admixture': install_admixture,
 }
 
@@ -178,21 +198,28 @@ def install_all(
 # Uninstall functions
 # ---------------------------------------------------------------------------
 
-def uninstall_eigensoft(version: str = EIGENSOFT_VERSION, install_dir: Path | None = None) -> None:
+
+def uninstall_eigensoft(
+    version: str = EIGENSOFT_VERSION, install_dir: Path | None = None
+) -> None:
     _uninstall('eigensoft', version, install_dir or INSTALL_DIR)
 
 
-def uninstall_flare(version: str = FLARE_VERSION, install_dir: Path | None = None) -> None:
+def uninstall_flare(
+    version: str = FLARE_VERSION, install_dir: Path | None = None
+) -> None:
     _uninstall('flare', version, install_dir or INSTALL_DIR)
 
 
-def uninstall_admixture(version: str = ADMIXTURE_VERSION, install_dir: Path | None = None) -> None:
+def uninstall_admixture(
+    version: str = ADMIXTURE_VERSION, install_dir: Path | None = None
+) -> None:
     _uninstall('admixture', version, install_dir or INSTALL_DIR)
 
 
-UNINSTALL_FUNCS: dict[str, callable] = {
+UNINSTALL_FUNCS: dict[str, Callable] = {
     'eigensoft': uninstall_eigensoft,
-    'flare':     uninstall_flare,
+    'flare': uninstall_flare,
     'admixture': uninstall_admixture,
 }
 
@@ -208,7 +235,7 @@ def uninstall_all(install_dir: Path | None = None) -> None:
 # Binary tools: (dir_name, version, relative_check_path)
 _INSTALL_CHECK = {
     'eigensoft': ('eigensoft', EIGENSOFT_VERSION, 'bin/smartpca'),
-    'flare':     ('flare',     FLARE_VERSION,     'bin/flare'),
+    'flare': ('flare', FLARE_VERSION, 'bin/flare'),
     'admixture': ('admixture', ADMIXTURE_VERSION, 'bin/admixture'),
 }
 
@@ -222,5 +249,3 @@ def list_tools(install_dir: Path | None = None) -> None:
         installed = (_prefix(tool, version, install_dir) / check).exists()
         status = 'installed' if installed else 'not installed'
         print(f'{name:<14} {version:<20} {status}')
-
-

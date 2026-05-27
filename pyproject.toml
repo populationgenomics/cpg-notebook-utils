@@ -24,11 +24,11 @@ dependencies = [
     "plotly",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest",
     "ruff",
-    "pre-commit",
+    "pre-commit>=4.0.1",
 ]
 
 [project.urls]
