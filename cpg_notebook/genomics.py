@@ -26,6 +26,7 @@ mid-session. After setup_path() runs, either:
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -46,8 +47,10 @@ SHAPEIT5_VERSION  = '5.1.1'
 BEAGLE_VERSION    = '27Feb25.75f'
 GLIMPSE2_VERSION  = '2.0.0'
 KING_VERSION      = '2.3.2'
-PLINK2_VERSION    = '20260504'
-PLINK19_VERSION   = '20250819'
+PLINK2_VERSION    = 'v2.0.0-a.7.1'    # GitHub release tag on chrchang/plink-ng; pass 'latest' to auto-resolve
+PLINK19_VERSION   = 'v1.9.0-b.7.11'   # GitHub release tag on chrchang/plink-ng; pass 'latest' to auto-resolve
+
+_PLINK_NG_REPO    = 'chrchang/plink-ng'
 HAPIBD_VERSION    = 'latest'   # no versioned release URL — downloads current jar from faculty page
 IBDENDS_VERSION   = 'latest'   # no pinned release — downloads current jar from faculty page
 
@@ -645,16 +648,45 @@ def install_king(
     )
 
 
+def _resolve_plink_tag(version: str, *, tag_prefix: str) -> str:
+    """Resolve 'latest' to a concrete tag on chrchang/plink-ng. Passes other values through.
+
+    chrchang/plink-ng publishes parallel PLINK 1.9 (v1.9.0-*) and PLINK 2.0
+    (v2.0.0-*) releases, so we filter the recent-releases list by tag prefix
+    rather than using the repo-wide 'latest' endpoint (which can flip between
+    the 1.9 and 2.0 branches depending on which shipped most recently).
+    """
+    if version != 'latest':
+        return version
+    api_url = f'https://api.github.com/repos/{_PLINK_NG_REPO}/releases?per_page=30'
+    log.info('resolving latest %s* release from %s', tag_prefix, api_url)
+    with urllib.request.urlopen(api_url) as resp:
+        releases = json.load(resp)
+    for rel in releases:
+        tag = rel.get('tag_name', '')
+        if tag.startswith(tag_prefix):
+            return tag
+    raise RuntimeError(
+        f'no release found on {_PLINK_NG_REPO} with tag prefix {tag_prefix!r} '
+        f'in the most recent 30 releases',
+    )
+
+
 def install_plink2(
     version: str = PLINK2_VERSION,
     install_dir: Path | None = None,
     build_dir: Path = BUILD_DIR,
     force: bool = False,
 ) -> Path:
-    """Download PLINK2 pre-compiled binary (AVX2). Returns the bin/ directory."""
+    """Download PLINK 2 pre-compiled binary (AVX2) from chrchang/plink-ng GitHub releases.
+
+    Pass version='latest' to auto-resolve to the newest v2.0.0-* release tag.
+    Returns the bin/ directory.
+    """
+    tag = _resolve_plink_tag(version, tag_prefix='v2.0.0-')
     return _install_archived_binary(
-        'plink2', version,
-        f'https://s3.amazonaws.com/plink2-assets/plink2_linux_avx2_{version}.zip',
+        'plink2', tag,
+        f'https://github.com/{_PLINK_NG_REPO}/releases/download/{tag}/plink2_linux_avx2.zip',
         'plink2',
         install_dir or INSTALL_DIR, build_dir, force,
     )
@@ -666,10 +698,15 @@ def install_plink19(
     build_dir: Path = BUILD_DIR,
     force: bool = False,
 ) -> Path:
-    """Download PLINK 1.9 pre-compiled binary. Returns the bin/ directory."""
+    """Download PLINK 1.9 pre-compiled binary from chrchang/plink-ng GitHub releases.
+
+    Pass version='latest' to auto-resolve to the newest v1.9.0-* release tag.
+    Returns the bin/ directory.
+    """
+    tag = _resolve_plink_tag(version, tag_prefix='v1.9.0-')
     return _install_archived_binary(
-        'plink19', version,
-        f'https://s3.amazonaws.com/plink1-assets/plink_linux_x86_64_{version}.zip',
+        'plink19', tag,
+        f'https://github.com/{_PLINK_NG_REPO}/releases/download/{tag}/plink_linux_x86_64.zip',
         'plink',
         install_dir or INSTALL_DIR, build_dir, force,
     )
