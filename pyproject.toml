@@ -16,10 +16,13 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
-# No runtime dependencies. Modules either use only the standard library
-# (genomics, pop_genetics) or expect hail/polars to be pre-installed in
-# the notebook runtime (datascience).
-dependencies = []
+# genomics / pop_genetics use only the standard library.
+# datascience expects hail/polars/pandas/numpy to be pre-installed in the
+# notebook runtime image (deliberately not declared here — hail in particular
+# is version-coupled to the cluster).
+dependencies = [
+    "plotly",
+]
 
 [project.optional-dependencies]
 dev = [

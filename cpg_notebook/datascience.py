@@ -1,8 +1,8 @@
 """cpg_notebook.datascience — data science utilities for CPG notebook environments.
 
-Provides helpers for converting between Hail and Polars data structures,
-targeting CPG COS notebook VMs where both Hail (via Spark) and Polars are
-available.
+Provides helpers for converting between Hail and Polars data structures, plus
+interactive plotly visualisations, targeting CPG COS notebook VMs where Hail
+(via Spark), Polars, and Plotly are all available.
 
 From a notebook Python cell::
 
@@ -15,6 +15,16 @@ From a notebook Python cell::
 
     # Polars → Hail (round-trip)
     ht = nds.from_polars(pt)
+
+    # Interactive PCA scatter with X/Y/SD dropdowns
+    fig = nds.plot_pca(
+        df,
+        layers=[
+            nds.PCALayer(name='Ref', group_col='ancestry'),
+            nds.PCALayer(name='Study', group_col='cohort', draw_ellipses=True),
+        ],
+    )
+    fig.show()
 
 Conversion paths
 ----------------
@@ -66,13 +76,16 @@ import logging
 import os
 import shutil
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any
 
 import hail as hl
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
 import polars as pl
 from hail.expr import types as htypes
-
 
 log = logging.getLogger(__name__)
 
@@ -111,7 +124,7 @@ class PolarsTable:
 
     df: pl.DataFrame
     globals: dict = field(default_factory=dict)
-    row_schema: Optional[htypes.tstruct] = None
+    row_schema: htypes.tstruct | None = None
     keys: list[str] = field(default_factory=list)
 
 
@@ -299,7 +312,7 @@ def _reconstruct_expr(expr, hail_type):
     if isinstance(hail_type, htypes.tset):
         elem_type = hail_type.element_type
         if _needs_reconstruction(elem_type):
-            arr = hl.map(lambda x: _reconstruct_expr(x, elem_type), expr)  # noqa: B023
+            arr = hl.map(lambda x: _reconstruct_expr(x, elem_type), expr)
         else:
             arr = expr
         return hl.set(arr)
@@ -323,7 +336,7 @@ def _reconstruct_expr(expr, hail_type):
         elem_type = hail_type.element_type
         if not _needs_reconstruction(elem_type):
             return expr
-        return hl.map(lambda x: _reconstruct_expr(x, elem_type), expr)  # noqa: B023
+        return hl.map(lambda x: _reconstruct_expr(x, elem_type), expr)
 
     if isinstance(hail_type, htypes.tdict):
         key_type = hail_type.key_type
@@ -332,7 +345,7 @@ def _reconstruct_expr(expr, hail_type):
             return expr
         # expand_types encodes tdict<K,V> as tarray<tstruct(key: K', value: V')>
         return hl.dict(hl.map(
-            lambda kv: hl.tuple([  # noqa: B023
+            lambda kv: hl.tuple([
                 _reconstruct_expr(kv.key, key_type),
                 _reconstruct_expr(kv.value, val_type),
             ]),
@@ -383,7 +396,7 @@ def _apply_schema_reconstruction(ht: hl.Table, row_schema: htypes.tstruct) -> hl
 # ---------------------------------------------------------------------------
 
 
-def _to_polars_via_parquet(ht: hl.Table, tmp_dir: Optional[str] = None) -> pl.DataFrame:
+def _to_polars_via_parquet(ht: hl.Table, tmp_dir: str | None = None) -> pl.DataFrame:
     """Convert a Hail Table to a Polars DataFrame via a local parquet round-trip.
 
     Most robust conversion path.  ``to_spark(flatten=False)`` invokes Hail's
@@ -455,7 +468,7 @@ def _to_polars_via_arrow(ht: hl.Table) -> pl.DataFrame:
 # ---------------------------------------------------------------------------
 
 
-def _to_hail_via_parquet(pt: PolarsTable, tmp_dir: Optional[str] = None) -> hl.Table:
+def _to_hail_via_parquet(pt: PolarsTable, tmp_dir: str | None = None) -> hl.Table:
     """Convert the DataFrame in *pt* to an unkeyed Hail Table via parquet.
 
     Polars writes a single parquet file; Spark reads it back and
@@ -517,7 +530,7 @@ def to_polars(
     ht: hl.Table,
     flatten: bool = False,
     prefer: str = 'auto',
-    tmp_dir: Optional[str] = None,
+    tmp_dir: str | None = None,
 ) -> PolarsTable:
     """Convert a Hail Table to a :class:`PolarsTable` (DataFrame + round-trip metadata).
 
@@ -588,7 +601,7 @@ def to_polars(
     globals_dict = _hail_to_python(globals_struct) if globals_struct is not None else {}
 
     # Capture schema and keys before flatten changes the layout.
-    row_schema: Optional[htypes.tstruct] = ht.row.dtype
+    row_schema: htypes.tstruct | None = ht.row.dtype
     keys: list[str] = list(ht.key.dtype.fields)
 
     if flatten:
@@ -614,8 +627,8 @@ def to_polars(
 def from_polars(
     pt: PolarsTable,
     prefer: str = 'auto',
-    key: Optional[list[str]] = None,
-    tmp_dir: Optional[str] = None,
+    key: list[str] | None = None,
+    tmp_dir: str | None = None,
 ) -> hl.Table:
     """Convert a :class:`PolarsTable` back to a Hail Table.
 
@@ -724,3 +737,318 @@ def from_polars(
         ht = ht.annotate_globals(**pt.globals)
 
     return ht
+
+
+# ---------------------------------------------------------------------------
+# Interactive PCA plot
+# ---------------------------------------------------------------------------
+
+# Default 10-colour palette for layers without an explicit color_map.
+_DEFAULT_PALETTE = (
+    '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+    '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf',
+)
+
+
+@dataclass
+class PCALayer:
+    """One cohort to draw on a PCA plot.
+
+    Args:
+        name: Legend prefix, e.g. 'Ref' or 'OurDNA'. Each group within the
+            layer becomes a separate trace named '{name}: {group}'.
+        group_col: Column whose distinct values define the per-group traces.
+        mask: Optional boolean Series selecting which rows of the input
+            DataFrame belong to this layer. None means "all rows".
+        color_map: Mapping group label -> hex colour. If None, groups are
+            assigned colours from the default palette in sort order.
+        marker_symbol: Plotly marker symbol ('circle', 'cross', 'diamond', …).
+        marker_alpha: Marker opacity in [0, 1].
+        marker_size: Marker size in pixels.
+        marker_line_width: Outline width in pixels. 0 disables the outline.
+        draw_ellipses: If True, also draw axis-aligned ±N·SD ellipses per
+            group (median ± N·std on each PC axis). Only the SD selected by
+            the dropdown is visible at any time.
+        sample_col: Column treated as the primary point identifier — shown
+            bolded as the first line of the hover tooltip.
+        hover_cols: Extra columns to include in the hover tooltip, as a
+            mapping column -> display label. Use {} for none.
+    """
+    name: str
+    group_col: str
+    mask: pd.Series | None = None
+    color_map: dict[str, str] | None = None
+    marker_symbol: str = 'circle'
+    marker_alpha: float = 0.5
+    marker_size: int = 6
+    marker_line_width: int = 0
+    draw_ellipses: bool = False
+    sample_col: str = 'sample'
+    hover_cols: dict[str, str] = field(default_factory=dict)
+
+
+def plot_pca(
+    df: pd.DataFrame | pl.DataFrame,
+    layers: Sequence[PCALayer],
+    *,
+    pc_prefix: str = 'PC',
+    n_pcs: int | None = None,
+    sd_thresholds: Sequence[int] = (1, 2, 3, 4, 5, 6),
+    default_sd: int | None = None,
+    title: str = 'PCA projection',
+    height: int = 800,
+    output_html: str | None = None,
+) -> go.Figure:
+    """Build an interactive plotly PCA scatter with X / Y / SD dropdowns.
+
+    Renders one trace per (layer, group) and, for layers with draw_ellipses
+    set, one axis-aligned ±N·SD ellipse per (layer, group, SD) — only the SD
+    selected via the dropdown is visible at a time. The dropdowns relabel the
+    axes by remapping the trace data, so the same figure can be flipped
+    between any two PCs without rebuilding.
+
+    Args:
+        df: Pandas or polars DataFrame. Must contain `{pc_prefix}{i}` columns
+            for i in 1..n_pcs. Polars input is converted to pandas internally.
+        layers: One PCALayer per cohort. Layers are drawn in order; later
+            layers paint on top.
+        pc_prefix: Prefix for PC column names. 'PC' -> 'PC1', 'PC2', …
+        n_pcs: How many PCs to expose in the dropdowns. If None, auto-detect
+            from the columns. The X dropdown ranges over PC1..PCn and the Y
+            dropdown over PC2..PCn.
+        sd_thresholds: SD values to precompute ellipses for. Only consulted
+            for layers with draw_ellipses=True.
+        default_sd: SD value visible on initial render. None ('Off') hides
+            all ellipses until the user picks one from the dropdown.
+        title: Figure title.
+        height: Figure height in pixels.
+        output_html: If given, also write the figure to a standalone HTML
+            file at this path.
+
+    Returns:
+        A `plotly.graph_objects.Figure`. Call `.show()` in a notebook to
+        render it; the dropdowns are baked into the figure's own JSON, so the
+        exported HTML is fully interactive without a Python kernel.
+    """
+    pdf = _to_pandas(df)
+
+    if n_pcs is None:
+        n_pcs = _detect_n_pcs(pdf, pc_prefix)
+    if n_pcs < 2:
+        raise ValueError(
+            f'plot_pca: need at least 2 {pc_prefix}* columns; '
+            f'found {n_pcs} starting from {pc_prefix}1',
+        )
+
+    fig = go.Figure()
+    theta = np.linspace(0, 2 * np.pi, 100)
+
+    # trace_recipes parallels fig.data: one entry per trace, in order.
+    # Used later to rebuild x/y arrays for each PC dropdown option.
+    trace_recipes: list[dict[str, Any]] = []
+
+    for layer in layers:
+        rows = pdf if layer.mask is None else pdf[layer.mask]
+        groups = list(rows[layer.group_col].dropna().unique())
+        cmap = _resolve_color_map(layer.color_map, groups)
+
+        for group in groups:
+            sub = rows[rows[layer.group_col] == group]
+            if sub.empty:
+                continue
+
+            color = cmap.get(group, _DEFAULT_PALETTE[0])
+            customdata, hovertemplate = _build_hover(sub, layer)
+
+            marker: dict[str, Any] = dict(
+                symbol=layer.marker_symbol,
+                size=layer.marker_size,
+                color=color,
+                opacity=layer.marker_alpha,
+            )
+            if layer.marker_line_width > 0:
+                marker['line'] = dict(width=layer.marker_line_width, color='black')
+
+            trace_recipes.append({'kind': 'scatter', 'sub': sub})
+            fig.add_trace(go.Scattergl(
+                x=sub[f'{pc_prefix}1'],
+                y=sub[f'{pc_prefix}2'],
+                mode='markers',
+                name=f'{layer.name}: {group}',
+                marker=marker,
+                customdata=customdata,
+                hovertemplate=hovertemplate,
+            ))
+
+            if not layer.draw_ellipses:
+                continue
+
+            mu_x = sub[f'{pc_prefix}1'].median()
+            sig_x = sub[f'{pc_prefix}1'].std()
+            mu_y = sub[f'{pc_prefix}2'].median()
+            sig_y = sub[f'{pc_prefix}2'].std()
+            for sd in sd_thresholds:
+                is_active = sd == default_sd
+                trace_recipes.append({'kind': 'ellipse', 'sub': sub, 'sd': sd})
+                fig.add_trace(go.Scatter(
+                    x=mu_x + sd * sig_x * np.cos(theta),
+                    y=mu_y + sd * sig_y * np.sin(theta),
+                    mode='lines',
+                    name=f'{layer.name}: {group} bounds',
+                    legendgroup=f'{layer.name}_ellipse_{group}',
+                    visible=is_active,
+                    showlegend=is_active,
+                    hoverinfo='skip',
+                    line=dict(color=color, width=2, dash='dot' if sd <= 3 else 'dash'),
+                ))
+
+    x_buttons = _pc_axis_buttons(trace_recipes, pc_prefix, theta, range(1, n_pcs + 1), axis='x')
+    y_buttons = _pc_axis_buttons(trace_recipes, pc_prefix, theta, range(2, n_pcs + 1), axis='y')
+    sd_buttons = _sd_buttons(trace_recipes, sd_thresholds)
+
+    axis_style = dict(
+        showgrid=True, gridcolor='black', griddash='dash',
+        zeroline=True, zerolinecolor='black', zerolinewidth=1.5,
+        linecolor='black',
+    )
+    fig.update_layout(
+        title=title,
+        legend_title='Cohorts & bounds (click to toggle)',
+        height=height,
+        hovermode='closest',
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        xaxis=dict(title_text=f'{pc_prefix}1', **axis_style),
+        yaxis=dict(title_text=f'{pc_prefix}2', **axis_style),
+        updatemenus=[
+            dict(buttons=x_buttons, direction='down', pad={'r': 10, 't': 10},
+                 showactive=True, x=0.08, xanchor='left', y=1.1, yanchor='top'),
+            dict(buttons=y_buttons, direction='down', pad={'r': 10, 't': 10},
+                 showactive=True, x=0.25, xanchor='left', y=1.1, yanchor='top'),
+            dict(buttons=sd_buttons, direction='down', pad={'r': 10, 't': 10},
+                 showactive=True, x=0.45, xanchor='left', y=1.1, yanchor='top'),
+        ],
+        annotations=[
+            dict(text='X-Axis:', x=0.04, y=1.08, xref='paper', yref='paper', showarrow=False),
+            dict(text='Y-Axis:', x=0.21, y=1.08, xref='paper', yref='paper', showarrow=False),
+            dict(text='Ellipses:', x=0.40, y=1.08, xref='paper', yref='paper', showarrow=False),
+        ],
+    )
+
+    if output_html:
+        fig.write_html(output_html)
+
+    return fig
+
+
+def _to_pandas(df: pd.DataFrame | pl.DataFrame) -> pd.DataFrame:
+    if isinstance(df, pd.DataFrame):
+        return df
+    if isinstance(df, pl.DataFrame):
+        return df.to_pandas()
+    raise TypeError(
+        f'plot_pca: expected pandas or polars DataFrame, got {type(df).__name__}',
+    )
+
+
+def _detect_n_pcs(pdf: pd.DataFrame, pc_prefix: str) -> int:
+    n = 0
+    while f'{pc_prefix}{n + 1}' in pdf.columns:
+        n += 1
+    return n
+
+
+def _resolve_color_map(
+    color_map: dict[str, str] | None,
+    groups: Sequence[str],
+) -> dict[str, str]:
+    if color_map is not None:
+        return color_map
+    return {
+        g: _DEFAULT_PALETTE[i % len(_DEFAULT_PALETTE)]
+        for i, g in enumerate(sorted(groups))
+    }
+
+
+def _build_hover(sub: pd.DataFrame, layer: PCALayer):
+    """Return (customdata, hovertemplate) for a single (layer, group) trace."""
+    cols: list[str] = []
+    labels: list[str] = []
+    if layer.sample_col in sub.columns:
+        cols.append(layer.sample_col)
+        labels.append('')  # rendered bold without a label
+    for c, lbl in layer.hover_cols.items():
+        if c in sub.columns:
+            cols.append(c)
+            labels.append(lbl)
+
+    if not cols:
+        return None, 'X: %{x:.3f} | Y: %{y:.3f}<extra></extra>'
+
+    customdata = sub[cols].values
+    lines: list[str] = []
+    for i, lbl in enumerate(labels):
+        token = f'%{{customdata[{i}]}}'
+        if i == 0 and lbl == '':
+            lines.append(f'<b>{token}</b>')
+        elif lbl == '':
+            lines.append(token)
+        else:
+            lines.append(f'{lbl}: {token}')
+    lines.append('X: %{x:.3f} | Y: %{y:.3f}')
+    return customdata, '<br>'.join(lines) + '<extra></extra>'
+
+
+def _pc_axis_buttons(
+    trace_recipes: Sequence[dict[str, Any]],
+    pc_prefix: str,
+    theta: np.ndarray,
+    pc_range: range,
+    *,
+    axis: str,
+) -> list[dict[str, Any]]:
+    """Build dropdown buttons that swap the X or Y axis to a different PC."""
+    buttons = []
+    trig = np.cos(theta) if axis == 'x' else np.sin(theta)
+    for i in pc_range:
+        pc_col = f'{pc_prefix}{i}'
+        data = []
+        for recipe in trace_recipes:
+            sub = recipe['sub']
+            if recipe['kind'] == 'scatter':
+                data.append(sub[pc_col].values)
+            else:  # ellipse
+                mu = sub[pc_col].median()
+                sig = sub[pc_col].std()
+                data.append(mu + recipe['sd'] * sig * trig)
+        buttons.append(dict(
+            label=pc_col,
+            method='update',
+            args=[{axis: data}, {f'{axis}axis.title.text': pc_col}],
+        ))
+    return buttons
+
+
+def _sd_buttons(
+    trace_recipes: Sequence[dict[str, Any]],
+    sd_thresholds: Sequence[int],
+) -> list[dict[str, Any]]:
+    """Build dropdown buttons that show one SD ellipse (or Off) at a time."""
+    buttons = []
+    for target_sd in [None, *sd_thresholds]:
+        vis, show_leg = [], []
+        for recipe in trace_recipes:
+            if recipe['kind'] == 'scatter':
+                vis.append(True)
+                show_leg.append(True)
+            else:
+                is_active = recipe['sd'] == target_sd
+                vis.append(is_active)
+                show_leg.append(is_active)
+        label = f'{target_sd} SD' if target_sd is not None else 'Off'
+        buttons.append(dict(
+            label=label,
+            method='restyle',
+            args=[{'visible': vis, 'showlegend': show_leg}],
+        ))
+    return buttons

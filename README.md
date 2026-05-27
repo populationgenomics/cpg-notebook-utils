@@ -33,6 +33,18 @@ npg.install_eigensoft()
 from cpg_notebook import datascience as nds
 pt = nds.to_polars(my_hail_table)
 ht = nds.from_polars(pt)
+
+# Interactive PCA plot with X/Y/SD dropdowns
+fig = nds.plot_pca(
+    df,
+    layers=[
+        nds.PCALayer(name='Ref', group_col='genetic_ancestry',
+                     mask=df['set'] == 'reference', marker_symbol='cross'),
+        nds.PCALayer(name='OurDNA', group_col='screening_ancestry_group',
+                     mask=df['set'] == 'ourdna', draw_ellipses=True),
+    ],
+)
+fig.show()
 ```
 
 See `docs/genomics.md` and `docs/pop_genetics.md` for full design notes.
@@ -42,10 +54,11 @@ See `docs/genomics.md` and `docs/pop_genetics.md` for full design notes.
 - **`genomics` / `pop_genetics`**: target the CPG COS notebook VM. They write
   to `/content/tools` (local SSD, ~2.9T, does not persist across VM shutdown)
   and symlink into `/usr/local/bin`. They invoke `apt-get` for build deps.
-- **`datascience`**: expects `hail` and `polars` to be importable. Both are
-  pre-installed in the CPG notebook image, so they are deliberately **not**
-  declared as install dependencies — pip-installing hail outside the image
-  is fragile (version-coupled to the cluster).
+- **`datascience`**: expects `hail`, `polars`, `pandas`, `numpy` to be
+  importable. All are pre-installed in the CPG notebook image, so they are
+  deliberately **not** declared as install dependencies — pip-installing hail
+  outside the image is fragile (version-coupled to the cluster). The one
+  plotting dep that *is* declared is `plotly`, used by `plot_pca`.
 
 ## Development
 
