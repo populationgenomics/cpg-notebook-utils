@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cpg-notebook-utils"
+version = "0.1.0"
+description = "Utilities for CPG COS notebook VMs: bioinformatics tool installers and Hail↔Polars helpers"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Centre for Population Genomics" }]
+keywords = ["bioinformatics", "notebook", "cpg"]
+classifiers = [
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+# No runtime dependencies. Modules either use only the standard library
+# (genomics, pop_genetics) or expect hail/polars to be pre-installed in
+# the notebook runtime (datascience).
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+    "pre-commit",
+]
+
+[project.urls]
+Repository = "https://github.com/populationgenomics/cpg-notebook-utils"
+
+[tool.hatch.build.targets.wheel]
+packages = ["cpg_notebook"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
+ignore = [
+    "E501",   # line length handled by formatter
+    "B008",   # function call in argument defaults (mutable Path is fine here)
+]
+
+[tool.ruff.format]
+quote-style = "single"
